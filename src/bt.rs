@@ -1312,4 +1312,38 @@ mod tests {
         // Then
         assert_eq!(res.unwrap(), Status::Success);
     }
+
+
+    //      Seq
+    //     /   \
+    //  Cond1  Action2
+    //    |  
+    // Action1
+    // pass cond1, pass action1, cond1 fails during action2, seq fails
+    #[tokio::test]
+    async fn test_sequence_failing_succeeded_condition() {
+        load_logger();
+        // Setup
+        let handle1 = Handle::new(1);
+
+        // When
+        let action1 = MockAction::new(2);
+        let cond1 = Condition::new("1", handle1.clone(), |i: i32| i > 0, action1);
+        let action2 = Wait::new(Duration::from_millis(200));
+        let fb = Sequence::new(vec![cond1, action2]);
+        let mut bt = BehaviorTree::new_test(fb);
+        assert_eq!(bt.handles.len(), 4);
+
+        let (res, _) = tokio::join!(
+            bt.run(),
+            async {
+                sleep(Duration::from_millis(600)).await;
+                handle1.set(-1).await;
+                log::debug!("Condition 1 switched to Failure")
+            }
+        );
+
+        // Then
+        assert_eq!(res.unwrap(), Status::Failure);
+    }
 }
