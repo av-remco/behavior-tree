@@ -158,19 +158,20 @@ impl BehaviorTree {
     /// A method specifically for testing, which allows to directly read any errors or a result from the BT
     pub async fn run(&mut self) -> Result<Status, NodeError> {
         self.root_node.send(ChildMessage::Start)?;
+        log::debug!("Root - notify child {:?}: {:?}", self.root_node.name, ChildMessage::Start);
         self.status = Status::Running;
         loop {
             match self.root_node.listen().await? {
                 ParentMessage::Status(status) => match status {
                     Status::Success => {
                         self.status = Status::Success;
+                        log::debug!("Killing all handles");
                         self.kill().await;
-                        log::debug!("Returning Status: {:?}", status);
                         break },
                     Status::Failure => {
                         self.status = Status::Failure;
+                        log::debug!("Killing all handles");
                         self.kill().await;
-                        log::debug!("Returning Status: {:?}", status);
                         break },
                     _ => {}
                 },
@@ -179,6 +180,7 @@ impl BehaviorTree {
                 ParentMessage::Killed => return Err(NodeError::KillError), // This should not occur
             }
         }
+        log::debug!("Returning Status: {:?}", self.status);
         Ok(self.status.clone())
     }
 
@@ -258,6 +260,7 @@ impl BehaviorTree {
 #[allow(unused_imports)]
 mod tests {
     use actify::Handle;
+    use log::logger;
     use std::collections::HashMap;
 
     use super::*;
@@ -271,7 +274,7 @@ mod tests {
     use crate::bt::action::mocking::{MockAction, MockBlockingAction, MockRunBlockingOnce};
     use crate::bt::condition::mocking::MockAsyncCondition;
     use crate::logging::load_logger;
-    use crate::{BlockingFallback, BlockingSequence};
+    use crate::{BlockingFallback, BlockingSequence, Wait};
     use listener::OuterStatus;
 
     async fn dummy_bt() -> BehaviorTree {
@@ -475,7 +478,6 @@ mod tests {
     // Action1
     #[tokio::test]
     async fn test_root_unchanged_when_finished() {
-        load_logger();
         // Setup
         let handle = Handle::new(-1);
 
@@ -500,7 +502,8 @@ mod tests {
     //  Cond2
     //    |
     // Action1
-    // Cond1 succeeds, cond2 fails, cond1 gets updated but does not send request start, action2 fails
+    // Cond1 succeeds, cond2 fails, cond1 gets updated but does NOT send request start, cond2 gets updated and does send request start
+    // Action2 is interupted
     #[tokio::test]
     async fn test_no_request_start_when_already_ok() {
         // Setup
@@ -509,7 +512,7 @@ mod tests {
 
         // When
         let action1 = MockAction::new(1);
-        let action2 = MockAction::fail_on_twice(2); // A request start will lead to action2 being restarted, as cond2 still fails.
+        let action2 = MockAction::new_loop(2); // A request start will lead to action2 being restarted, as cond2 still fails.
         let cond2: NodeHandle = Condition::new("2", handle2.clone(), |x| x > 0, action1);
         let cond1: NodeHandle = Condition::new("1", handle1.clone(), |x| x > 0, cond2);
         let fb = Fallback::new(vec![cond1, action2]);
@@ -517,7 +520,9 @@ mod tests {
 
         let (res, _) = tokio::join!(bt.run(), async {
             sleep(Duration::from_millis(200)).await;
-            handle1.set(1).await // This value was already ok, but it should not lead to a request start, as it was already ok
+            handle1.set(1).await; // This value was already ok, but it should not lead to a request start, as it was already ok
+            sleep(Duration::from_millis(200)).await;
+            handle2.set(1).await
         });
 
         // Then
@@ -637,7 +642,7 @@ mod tests {
     //    |
     // Action1
     //
-    // Loop repeats, tests terminates without bt completion
+    // Loop is interrupted by Cond1
     #[tokio::test]
     async fn test_loop_is_stopped() {
         // Setup
@@ -669,8 +674,6 @@ mod tests {
     //  Cond1
     //    |
     // Action1
-    //
-    // Don't pas cond1
     #[tokio::test]
     async fn test_async_condition() {
         // Setup
@@ -860,7 +863,7 @@ mod tests {
     //     /   \
     //  Action1  Action2
     //
-    // pass cond1, during action1 fail cond1, fail action2, fail seq
+    // pass cond1, during action1 fail cond1, fail seq
     #[tokio::test]
     async fn test_blocking_sequence_failure() {
         // Setup
@@ -1072,7 +1075,7 @@ mod tests {
     //    |      |
     // Action1 Action2
     //
-    // Fail cond1, Pass cond1 during action1, Fail cond2 during action2, pass fb
+    // Fail cond1, Pass cond1 during action2, pass fb
     #[tokio::test]
     async fn test_vec_not_empty_with_subscribe() {
         // Setup
@@ -1088,15 +1091,11 @@ mod tests {
         let mut bt = BehaviorTree::new_test(fb);
         assert_eq!(bt.handles.len(), 5);
 
-        let (res, _, _) = tokio::join!(
+        let (res, _) = tokio::join!(
             bt.run(),
             async {
                 sleep(Duration::from_millis(200)).await;
                 handle1.set(vec![i32::default()]).await
-            },
-            async {
-                sleep(Duration::from_millis(400)).await;
-                handle2.set(-1).await
             }
         );
 
@@ -1289,7 +1288,7 @@ mod tests {
         let handle3 = Handle::new(1);
 
         // When
-        let action1 = MockAction::new(1);
+        let action1 = Wait::new(Duration::from_millis(400));
         let cond2 = Condition::new("2", handle2.clone(), |i: i32| i > 0, action1);
         let cond1 = Condition::new("1", handle1, |i: i32| i > 0, cond2);
         let action2 = MockAction::new(2);
