@@ -158,11 +158,20 @@ impl BehaviorTree {
     /// A method specifically for testing, which allows to directly read any errors or a result from the BT
     pub async fn run(&mut self) -> Result<Status, NodeError> {
         self.root_node.send(ChildMessage::Start)?;
+        self.status = Status::Running;
         loop {
             match self.root_node.listen().await? {
                 ParentMessage::Status(status) => match status {
-                    Status::Success => return Ok(status),
-                    Status::Failure => return Ok(status),
+                    Status::Success => {
+                        self.status = Status::Success;
+                        self.kill().await;
+                        log::debug!("Returning Status: {:?}", status);
+                        break },
+                    Status::Failure => {
+                        self.status = Status::Failure;
+                        self.kill().await;
+                        log::debug!("Returning Status: {:?}", status);
+                        break },
                     _ => {}
                 },
                 ParentMessage::RequestStart => panic!("Invalid message"),
@@ -170,6 +179,7 @@ impl BehaviorTree {
                 ParentMessage::Killed => return Err(NodeError::KillError), // This should not occur
             }
         }
+        Ok(self.status.clone())
     }
 
     pub fn save_xml_export<S: Into<String> + Clone>(&mut self, name: S) -> Result<()> {
@@ -464,7 +474,8 @@ mod tests {
     //    |
     // Action1
     #[tokio::test]
-    async fn test_root_restart_after_request() {
+    async fn test_root_unchanged_when_finished() {
+        load_logger();
         // Setup
         let handle = Handle::new(-1);
 
@@ -473,13 +484,13 @@ mod tests {
         let cond1: NodeHandle = Condition::new("1", handle.clone(), |x| x > 0, action1);
         let mut bt = BehaviorTree::new_test(cond1);
 
-        let (res, _) = tokio::join!(bt.start(), async {
+        let (res, _) = tokio::join!(bt.run(), async {
             sleep(Duration::from_millis(200)).await;
             handle.set(1).await
         });
 
         // Then
-        assert!(res.is_ok());
+        assert_eq!(res.unwrap(), Status::Failure);
     }
 
     //      FB
