@@ -262,6 +262,7 @@ mod tests {
     use crate::logging::load_logger;
     use crate::{BlockingFallback, BlockingSequence};
     use listener::OuterStatus;
+    use logtest::Logger;
 
     async fn dummy_bt() -> BehaviorTree {
         let handle = Handle::new(-1);
@@ -1301,4 +1302,79 @@ mod tests {
         // Then
         assert_eq!(res.unwrap(), Status::Success);
     }
+
+    // Redundant with tests below
+    #[tokio::test]
+    async fn test_true_if_success() {
+        let action = MockAction::new(1);
+        let mut bt = BehaviorTree::new_test(action);
+        assert_eq!(bt.handles.len(), 1);
+        
+        // Then
+        assert_eq!(bt.run().await.unwrap(), true);
+    }
+
+    #[tokio::test]
+    async fn test_false_if_failure() {
+        let action = MockAction::new_failing(1);
+        let mut bt = BehaviorTree::new_test(action);
+        assert_eq!(bt.handles.len(), 1);
+        
+        // Then
+        assert_eq!(bt.run().await.unwrap(), false);
+    }
+
+    #[tokio::test]
+    async fn test_run_bt_twice() {
+        let action = MockAction::new(1);
+        let mut bt = BehaviorTree::new_test(action);
+        assert_eq!(bt.handles.len(), 1);
+        
+        // Then
+        assert_eq!(bt.run().await.unwrap(), true);
+        assert_eq!(bt.run().await.unwrap(), true);
+    }
+
+    #[tokio::test]
+    async fn test_no_return_if_running() {
+        let action = MockAction::new_loop(1);
+        let mut bt = BehaviorTree::new_test(action);
+
+        assert_eq!(bt.handles.len(), 1);
+
+        let res = tokio::time::timeout(std::time::Duration::from_secs(1), bt.run()).await;
+        assert!(res.is_err(), "bt.run() unexpectedly returned: {:?}", res);
+    }
+
+    #[tokio::test]
+    async fn test_all_nodes_idle_after_return() {
+        let action = MockAction::new(1);
+        let mut bt = BehaviorTree::new_test(action);
+
+        let mut logger = Logger::start();
+        assert_eq!(bt.run().await.unwrap(), true);
+
+        let logs: Vec<_> = logger.collect();
+
+        // filter all logs mentioning node "1"
+        let node_logs: Vec<_> = logs
+            .iter()
+            .filter(|rec| rec.args().contains("Node 1")) // adjust to match how the repo formats
+            .collect();
+
+        assert!(
+            !node_logs.is_empty(),
+            "No logs found for node 1. Logs: {:?}",
+            logs
+        );
+
+        // check the last log line for this node contains "Idle"
+        let last = node_logs.last().unwrap();
+        assert!(
+            last.args().contains("Idle"),
+            "Expected final state Idle for Node 1, got: {}",
+            last.args()
+        );
+    }
+
 }
