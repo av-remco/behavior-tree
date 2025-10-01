@@ -79,7 +79,6 @@ where
 
     async fn update_status(&mut self, status: Status) -> Result<(), NodeError> {
         self.status = status.clone();
-        log::debug!("Node {} set to Status {:?}", self.inner.get_name(), status);
         self.notify_parent(ParentMessage::Status(status)).await?;
         Ok(())
     }

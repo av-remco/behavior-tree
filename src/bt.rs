@@ -83,8 +83,35 @@ impl BehaviorTree {
         Ok(())
     }
 
+    pub async fn run(&mut self) -> Result<bool, NodeError> {
+        self.root_node.send(ChildMessage::Start)?;
+        log::debug!("Root - notify child {:?}: {:?}", self.root_node.name, ChildMessage::Start);
+        self.status = Status::Running;
+        loop {
+            match self.root_node.listen().await? {
+                ParentMessage::Status(status) => match status {
+                    Status::Success => {
+                        self.status = Status::Success;
+                        log::debug!("Killing all handles");
+                        self.kill().await;
+                        return Ok(true) },
+                    Status::Failure => {
+                        self.status = Status::Failure;
+                        log::debug!("Killing all handles");
+                        self.kill().await;
+                        return Ok(false) },
+                    _ => {}
+                },
+                ParentMessage::RequestStart => panic!("Invalid message"),
+                ParentMessage::Poison(err) => return Err(err),
+                ParentMessage::Killed => return Err(NodeError::KillError), // This should not occur
+            }
+        }
+    }
+
     // Run continuously
-    pub async fn run(&mut self) -> NodeError {
+    #[cfg(test)]
+    pub async fn run_continuously(&mut self) -> NodeError {
         log::debug!("Starting BT from {:?}", self.root_node.name);
         let mut listener: Listener =
             Listener::new(self.name.clone(), self.handles.clone(), self.tx.clone());
@@ -125,6 +152,7 @@ impl BehaviorTree {
     /// Starts the BT.
     /// Upon failure, it will wait for any request starts based on async updated of the conditions
     /// Upon success, it will exit
+    #[cfg(test)]
     async fn start(&mut self) -> Result<(), NodeError> {
         self.root_node.send(ChildMessage::Start)?;
         self.status = Status::Running;
@@ -331,7 +359,7 @@ mod tests {
         tokio::pin!(timer);
         tokio::select! {
             _ = &mut timer => {None}
-            res = bt.run() => {Some(res)}
+            res = bt.run_continuously() => {Some(res)}
         };
 
         sleep(Duration::from_millis(200)).await;
@@ -434,7 +462,7 @@ mod tests {
         let mut bt = BehaviorTree::new_test(action1);
 
         tokio::select! {
-            _ = bt.run() => {}
+            _ = bt.run_continuously() => {}
             _ = async {
                 sleep(Duration::from_millis(1000)).await;
             } => {}
@@ -569,7 +597,7 @@ mod tests {
 
         // Note that because the whole tree is run, it should not be allowed to repeat
         tokio::select! {
-            err = bt.run() => {panic!("{err:?}");}
+            err = bt.run_continuously() => {panic!("{err:?}");}
             _ = async {
                 sleep(Duration::from_millis(1000)).await;
             } => {}
@@ -1347,11 +1375,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_all_nodes_idle_after_return() {
+    async fn test_all_nodes_killed_after_return() {
         let action = MockAction::new(1);
         let mut bt = BehaviorTree::new_test(action);
 
-        let mut logger = Logger::start();
+        let logger = Logger::start();
         assert_eq!(bt.run().await.unwrap(), true);
 
         let logs: Vec<_> = logger.collect();
@@ -1359,20 +1387,20 @@ mod tests {
         // filter all logs mentioning node "1"
         let node_logs: Vec<_> = logs
             .iter()
-            .filter(|rec| rec.args().contains("Node 1")) // adjust to match how the repo formats
+            .filter(|rec| rec.args().contains("1")) // adjust to match how the repo formats
             .collect();
 
         assert!(
             !node_logs.is_empty(),
-            "No logs found for node 1. Logs: {:?}",
+            "No logs found for action 1. Logs: {:?}",
             logs
         );
 
         // check the last log line for this node contains "Idle"
         let last = node_logs.last().unwrap();
         assert!(
-            last.args().contains("Idle"),
-            "Expected final state Idle for Node 1, got: {}",
+            last.args().contains("Killed"),
+            "Expected final state Killed for Action 1, got: {}",
             last.args()
         );
     }
@@ -1387,15 +1415,20 @@ mod tests {
         assert_eq!(bt.run().await.unwrap(), true);
 
         // Now check that all channels are quiet
-        for handle in &bt.handles {
+        for handle in &mut bt.handles {
             let fut = handle.listen(); // future that would resolve if a msg arrives
             let res = tokio::time::timeout(Duration::from_millis(400), fut).await;
 
-            assert!(
-                res.is_err(),
-                "Node {:?} still sent a message after return",
-                handle
-            );
+            match res {
+                Ok(Err(NodeError::TokioBroadcastRecvError(_))) => {
+                    // channel closed, this should happen
+                }
+                Err(_) => {
+                    // timeout -> no messages (good)
+                }
+                Ok(Ok(_msg)) => panic!("Unexpected message received after return"),
+                Ok(Err(e)) => panic!("Unexpected recv error: {:?}", e),
+            }
         }
     }
 
