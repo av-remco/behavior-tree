@@ -175,8 +175,8 @@ impl FallbackProcess {
             ParentMessage::RequestStart => {
                 match self.status {
                     Status::Failure => self.notify_parent(ParentMessage::RequestStart)?,
-                    Status::Idle => {} // When Idle or succesful, child nodes should never become active
-                    Status::Success => {}
+                    Status::Idle => {} // When Idle, child nodes should never become active
+                    Status::Success => self.notify_parent(ParentMessage::RequestStart)?,
                     Status::Running => {
                         let Some(running_child_index) = self.running_child else {
                             log::warn!("Fallback is running while no running child present"); // Should not happen
