@@ -83,7 +83,9 @@ impl BehaviorTree {
         Ok(())
     }
 
-    pub async fn run(&mut self) -> Result<bool, NodeError> {
+    // Execute the BT.
+    // Upon Success resp. Failure, kills the tree and returns true resp. false
+    pub async fn execute(&mut self) -> Result<bool, NodeError> {
         self.root_node.send(ChildMessage::Start)?;
         log::debug!("Root - notify child {:?}: {:?}", self.root_node.name, ChildMessage::Start);
         self.status = Status::Running;
@@ -110,8 +112,7 @@ impl BehaviorTree {
     }
 
     // Run continuously
-    #[cfg(test)]
-    pub async fn run_continuously(&mut self) -> NodeError {
+    pub async fn run(&mut self) -> NodeError {
         log::debug!("Starting BT from {:?}", self.root_node.name);
         let mut listener: Listener =
             Listener::new(self.name.clone(), self.handles.clone(), self.tx.clone());
@@ -152,7 +153,6 @@ impl BehaviorTree {
     /// Starts the BT.
     /// Upon failure, it will wait for any request starts based on async updated of the conditions
     /// Upon success, it will exit
-    #[cfg(test)]
     async fn start(&mut self) -> Result<(), NodeError> {
         self.root_node.send(ChildMessage::Start)?;
         self.status = Status::Running;
@@ -359,7 +359,7 @@ mod tests {
         tokio::pin!(timer);
         tokio::select! {
             _ = &mut timer => {None}
-            res = bt.run_continuously() => {Some(res)}
+            res = bt.run() => {Some(res)}
         };
 
         sleep(Duration::from_millis(200)).await;
@@ -462,7 +462,7 @@ mod tests {
         let mut bt = BehaviorTree::new_test(action1);
 
         tokio::select! {
-            _ = bt.run_continuously() => {}
+            _ = bt.run() => {}
             _ = async {
                 sleep(Duration::from_millis(1000)).await;
             } => {}
@@ -597,7 +597,7 @@ mod tests {
 
         // Note that because the whole tree is run, it should not be allowed to repeat
         tokio::select! {
-            err = bt.run_continuously() => {panic!("{err:?}");}
+            err = bt.run() => {panic!("{err:?}");}
             _ = async {
                 sleep(Duration::from_millis(1000)).await;
             } => {}
@@ -1339,7 +1339,7 @@ mod tests {
         assert_eq!(bt.handles.len(), 1);
         
         // Then
-        assert_eq!(bt.run().await.unwrap(), true);
+        assert_eq!(bt.execute().await.unwrap(), true);
     }
 
     #[tokio::test]
@@ -1349,7 +1349,7 @@ mod tests {
         assert_eq!(bt.handles.len(), 1);
         
         // Then
-        assert_eq!(bt.run().await.unwrap(), false);
+        assert_eq!(bt.execute().await.unwrap(), false);
     }
 
     #[tokio::test]
@@ -1359,7 +1359,7 @@ mod tests {
 
         assert_eq!(bt.handles.len(), 1);
 
-        let res = tokio::time::timeout(std::time::Duration::from_secs(1), bt.run()).await;
+        let res = tokio::time::timeout(std::time::Duration::from_secs(1), bt.execute()).await;
         assert!(res.is_err(), "bt.run() unexpectedly returned: {:?}", res);
     }
 
@@ -1370,8 +1370,8 @@ mod tests {
         assert_eq!(bt.handles.len(), 1);
         
         // Then
-        assert_eq!(bt.run().await.unwrap(), true);
-        assert_eq!(bt.run().await.unwrap(), true);
+        assert_eq!(bt.execute().await.unwrap(), true);
+        assert_eq!(bt.execute().await.unwrap(), true);
     }
 
     #[tokio::test]
@@ -1380,7 +1380,7 @@ mod tests {
         let mut bt = BehaviorTree::new_test(action);
 
         let logger = Logger::start();
-        assert_eq!(bt.run().await.unwrap(), true);
+        assert_eq!(bt.execute().await.unwrap(), true);
 
         let logs: Vec<_> = logger.collect();
 
@@ -1412,7 +1412,7 @@ mod tests {
         assert_eq!(bt.handles.len(), 1);
         
         // Then
-        assert_eq!(bt.run().await.unwrap(), true);
+        assert_eq!(bt.execute().await.unwrap(), true);
 
         // Now check that all channels are quiet
         for handle in &mut bt.handles {
