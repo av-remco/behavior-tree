@@ -239,7 +239,8 @@ where
                 }
             }
             Status::Success => {
-                if self.prev_evaluation && !self.run_evaluator(val.clone()).await? {
+                if self.prev_evaluation && !self.run_evaluator(val.clone()).await? 
+                    && !self.child.is_none() { // To keep the OneTimeCondition functionality
                     self.notify_parent(ParentMessage::RequestStart)?
                 }
             }
