@@ -1325,17 +1325,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_run_bt_twice() {
-        let action = MockAction::new(1);
-        let mut bt = BehaviorTree::new_test(action);
-        assert_eq!(bt.handles.len(), 1);
-        
-        // Then
-        assert_eq!(bt.run().await.unwrap(), true);
-        assert_eq!(bt.run().await.unwrap(), true);
-    }
-
-    #[tokio::test]
     async fn test_no_return_if_running() {
         let action = MockAction::new_loop(1);
         let mut bt = BehaviorTree::new_test(action);
@@ -1344,6 +1333,17 @@ mod tests {
 
         let res = tokio::time::timeout(std::time::Duration::from_secs(1), bt.run()).await;
         assert!(res.is_err(), "bt.run() unexpectedly returned: {:?}", res);
+    }
+
+    #[tokio::test]
+    async fn test_run_bt_twice() {
+        let action = MockAction::new(1);
+        let mut bt = BehaviorTree::new_test(action);
+        assert_eq!(bt.handles.len(), 1);
+        
+        // Then
+        assert_eq!(bt.run().await.unwrap(), true);
+        assert_eq!(bt.run().await.unwrap(), true);
     }
 
     #[tokio::test]
@@ -1376,5 +1376,28 @@ mod tests {
             last.args()
         );
     }
+
+    #[tokio::test]
+    async fn test_no_messages_after_return() {
+        let action = MockAction::new(1);
+        let mut bt = BehaviorTree::new_test(action);
+        assert_eq!(bt.handles.len(), 1);
+        
+        // Then
+        assert_eq!(bt.run().await.unwrap(), true);
+
+        // Now check that all channels are quiet
+        for handle in &bt.handles {
+            let fut = handle.listen(); // future that would resolve if a msg arrives
+            let res = tokio::time::timeout(Duration::from_millis(400), fut).await;
+
+            assert!(
+                res.is_err(),
+                "Node {:?} still sent a message after return",
+                handle
+            );
+        }
+    }
+
 
 }
