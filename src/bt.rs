@@ -22,6 +22,7 @@ pub mod handle;
 pub mod listener;
 pub mod loop_dec;
 pub mod sequence;
+pub mod blackboard;
 
 pub struct BehaviorTree {
     pub name: String,
