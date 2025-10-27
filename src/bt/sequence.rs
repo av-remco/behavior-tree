@@ -142,6 +142,13 @@ impl SequenceProcess {
         Ok(())
     }
 
+    fn stop_child(&mut self, child_index: usize) -> Result<(), NodeError> {
+        self.running_child = Some(child_index);
+        self.notify_child(child_index, ChildMessage::Stop)?;
+        Ok(())
+    }
+
+
     fn process_msg_from_parent(&mut self, msg: ChildMessage) -> Result<(), NodeError> {
         match msg {
             ChildMessage::Start => {
@@ -205,7 +212,31 @@ impl SequenceProcess {
                             }
                         }
                     }
-                    Status::Failure => self.update_status(Status::Failure)?,
+                    Status::Failure => {
+                        match self.status {
+                            Status::Running => {
+                                if let Some(current_child_index) = self.running_child {
+                                    if child_index < current_child_index {
+                                        // Stop current running child, previous condition has failed. Failure is propagated automatically after Stop
+                                        self.stop_child(current_child_index)?;
+                                    } else {
+                                        self.update_status(Status::Failure)?; // The current child failed
+                                    }
+                                }
+                            },
+                            Status::Success => self.update_status(Status::Failure)?,
+                            Status::Idle => { // This occurs when the sequence has been stopped, and is waiting for confirmation
+                                if let Some(current_child_index) = self.running_child {
+                                    if child_index == current_child_index {
+                                        self.update_status(Status::Failure)?; // The current child failed
+                                    } else {
+                                        // Catch race condition: Failure recieved from condition in child that is not the active child. Do nothing
+                                    }
+                                }
+                            },
+                            Status::Failure => log::warn!("Unexpected failure status received from child node"),
+                        }
+                    },
                     Status::Idle => log::warn!("Unexpected idle status received from child node"),
                     Status::Running => {}
                 }

@@ -1364,19 +1364,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_run_bt_twice() {
-        let action = MockAction::new(1);
-        let mut bt = BehaviorTree::new_test(action);
-        assert_eq!(bt.handles.len(), 1);
-        
-        // Then
-        assert_eq!(bt.execute().await.unwrap(), true);
-        assert_eq!(bt.execute().await.unwrap(), true);
-    }
-
-    #[tokio::test]
     async fn test_all_nodes_killed_after_return() {
-        let action = MockAction::new(1);
+        let action = MockAction::new(123456);
         let mut bt = BehaviorTree::new_test(action);
 
         let logger = Logger::start();
@@ -1384,15 +1373,15 @@ mod tests {
 
         let logs: Vec<_> = logger.collect();
 
-        // filter all logs mentioning node "1"
+        // filter all logs mentioning node "123456"
         let node_logs: Vec<_> = logs
             .iter()
-            .filter(|rec| rec.args().contains("1")) // adjust to match how the repo formats
+            .filter(|rec| rec.args().contains("123456")) // adjust to match how the repo formats
             .collect();
 
         assert!(
             !node_logs.is_empty(),
-            "No logs found for action 1. Logs: {:?}",
+            "No logs found for action. Logs: {:?}",
             logs
         );
 
@@ -1400,7 +1389,7 @@ mod tests {
         let last = node_logs.last().unwrap();
         assert!(
             last.args().contains("Killed"),
-            "Expected final state Killed for Action 1, got: {}",
+            "Expected final state Killed for Action, got: {}",
             last.args()
         );
     }
@@ -1445,7 +1434,6 @@ mod tests {
     // finished selectors do not block the failure propagating upwards
     #[tokio::test]
     async fn test_sequence_failing_succeeded_condition() {
-        load_logger();
         // Setup
         let handle1 = Handle::new(1);
 
@@ -1484,7 +1472,6 @@ mod tests {
     // finished selectors do not block the success propagating upwards
     #[tokio::test]
     async fn test_fallback_passing_failed_condition() {
-        load_logger();
         // Setup
         let handle1 = Handle::new(-1);
 

@@ -216,7 +216,7 @@ where
         &mut self,
         val: Result<V, CacheRecvNewestError>,
     ) -> Result<(), NodeError> {
-        // If it is running or success but the function evaluates to false, then fail
+        // If it is running, or success and not a OneTimeCondition, but the function evaluates to false, then fail
         // If it is fail but function evaluates to true, then request start
 
         // Skip errors
@@ -228,7 +228,7 @@ where
             Ok(v) => v,
         };
 
-        if (self.status.is_running() || self.status.is_succes()) && !self.run_evaluator(val.clone()).await? {
+        if (self.status.is_running() || (self.status.is_succes() && !self.child.is_none())) && !self.run_evaluator(val.clone()).await? {
             let status = self.stop_workflow().await?;
             self.update_status(status)?;
         } else if self.status.is_failure()

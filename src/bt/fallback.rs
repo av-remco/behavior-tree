@@ -208,7 +208,7 @@ impl FallbackProcess {
                             // This happens when a previously successful child condition evaluates to false
                             self.update_status(Status::Failure)?;
                         }
-                        Status::Failure => {} // This should never occur
+                        Status::Failure => {} // Can occur when a child condition fails. Only first fail is processed
                         Status::Running => {
                             let Some(running_child_index) = self.running_child else {
                                 log::warn!("Fallback is running while no running child present"); // Should not happen
