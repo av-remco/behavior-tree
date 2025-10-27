@@ -216,8 +216,8 @@ where
         &mut self,
         val: Result<V, CacheRecvNewestError>,
     ) -> Result<(), NodeError> {
-        // If its running but the function evaluates to false, then fail
-        // If it failed but function evaluates to true, then request start
+        // If it is running or success but the function evaluates to false, then fail
+        // If it is fail but function evaluates to true, then request start
 
         // Skip errors
         let val = match val {
@@ -228,7 +228,7 @@ where
             Ok(v) => v,
         };
 
-        if self.status.is_running() && !self.run_evaluator(val.clone()).await? {
+        if (self.status.is_running() || self.status.is_succes()) && !self.run_evaluator(val.clone()).await? {
             let status = self.stop_workflow().await?;
             self.update_status(status)?;
         } else if self.status.is_failure()
@@ -290,7 +290,7 @@ where
                 return Ok(Status::Failure); // When no child is present the condition failes directly
             }
         }
-        Ok(Status::Failure) // Default failure to parent to prevent blocking
+        Ok(Status::Failure) // Default failure to parent to prevent blocking, used when Success
     }
 
     async fn run_evaluator(&mut self, val: V) -> Result<bool, NodeError> {

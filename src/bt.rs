@@ -1442,7 +1442,7 @@ mod tests {
     //    |  
     // Action1 
     // pass cond1, pass action1, cond1 fails during action2, seq fails
-    // finished selectors do not block the switch
+    // finished selectors do not block the failure propagating upwards
     #[tokio::test]
     async fn test_sequence_failing_succeeded_condition() {
         load_logger();
@@ -1455,7 +1455,7 @@ mod tests {
         let action2 = Wait::new(Duration::from_millis(200));
         let subfb = Fallback::new(vec![cond1]);
         let subsq = Sequence::new(vec![subfb]);
-        let sq = Fallback::new(vec![subsq, action2]);
+        let sq = Sequence::new(vec![subsq, action2]);
         let mut bt = BehaviorTree::new_test(sq);
         assert_eq!(bt.handles.len(), 6);
 
@@ -1481,6 +1481,7 @@ mod tests {
     //    |  
     // Action1    
     // fail cond1, cond1 passes during action2, action1 passes, FB passes
+    // finished selectors do not block the success propagating upwards
     #[tokio::test]
     async fn test_fallback_passing_failed_condition() {
         load_logger();

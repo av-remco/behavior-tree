@@ -203,31 +203,39 @@ impl FallbackProcess {
             ParentMessage::Status(status) => match status {
                 Status::Success => self.update_status(Status::Success)?,
                 Status::Failure => {
-                    if self.status.is_running() {
-                        let Some(running_child_index) = self.running_child else {
-                            log::warn!("Fallback is running while no running child present"); // Should not happen
-                            return Ok(());
-                        };
-
-                        if child_index != running_child_index {
-                            return Ok(()); // Received a failure from a child that is not running, so ignore the message
+                    match self.status {
+                        Status::Success => {
+                            // This happens when a previously successful child condition evaluates to false
+                            self.update_status(Status::Failure)?;
                         }
+                        Status::Failure => {} // This should never occur
+                        Status::Running => {
+                            let Some(running_child_index) = self.running_child else {
+                                log::warn!("Fallback is running while no running child present"); // Should not happen
+                                return Ok(());
+                            };
 
-                        // If the running child stopped, start
-                        // 1) A prio child if available
-                        // 2) The next in the sequence if not exhausted
-                        // 3) Fail the fallback completely
-                        if let Some(prio_child_on_hold) = self.prio_child_on_hold {
-                            self.prio_child_on_hold = None; // Clear the waiting child
-                            self.start_child(prio_child_on_hold)?; // Start the previously failed but prio child
-                        } else if child_index < (self.children.len() - 1) {
-                            self.start_child(child_index + 1)?; // Start next in sequence
-                        } else {
-                            self.update_status(Status::Failure)?; // The sequence has completed
+                            if child_index != running_child_index {
+                                return Ok(()); // Received a failure from a child that is not running, so ignore the message
+                            }
+
+                            // If the running child stopped, start
+                            // 1) A prio child if available
+                            // 2) The next in the sequence if not exhausted
+                            // 3) Fail the fallback completely
+                            if let Some(prio_child_on_hold) = self.prio_child_on_hold {
+                                self.prio_child_on_hold = None; // Clear the waiting child
+                                self.start_child(prio_child_on_hold)?; // Start the previously failed but prio child
+                            } else if child_index < (self.children.len() - 1) {
+                                self.start_child(child_index + 1)?; // Start next in sequence
+                            } else {
+                                self.update_status(Status::Failure)?; // The sequence has completed
+                            }
                         }
-                    } else if self.status.is_idle() {
-                        // This occurs when the fallback has been stopped, and is waiting for confirmation from its child
-                        self.update_status(Status::Failure)?; // Confirm failure to parent
+                        Status::Idle => {
+                            // This occurs when the fallback has been stopped, and is waiting for confirmation from its child
+                            self.update_status(Status::Failure)?; // Confirm failure to parent
+                        }
                     }
                 }
                 Status::Idle => log::warn!("Unexpected idle status received from child node"),
