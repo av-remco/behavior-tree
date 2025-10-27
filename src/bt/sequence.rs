@@ -216,7 +216,7 @@ impl SequenceProcess {
                         match self.status {
                             Status::Running => {
                                 if let Some(current_child_index) = self.running_child {
-                                    if child_index < current_child_index {
+                                    if child_index <= current_child_index {
                                         // Stop current running child, previous condition has failed. Failure is propagated automatically after Stop
                                         self.stop_child(current_child_index)?;
                                     } else {
