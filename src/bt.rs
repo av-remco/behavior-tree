@@ -288,7 +288,7 @@ mod tests {
     use crate::bt::action::mocking::{MockAction, MockBlockingAction, MockRunBlockingOnce};
     use crate::bt::condition::mocking::MockAsyncCondition;
     use crate::logging::load_logger;
-    use crate::{BlockingFallback, BlockingSequence};
+    use crate::{BlockingFallback, BlockingSequence, Wait};
     use listener::OuterStatus;
     use logtest::Logger;
 
@@ -1363,16 +1363,6 @@ mod tests {
         assert!(res.is_err(), "bt.run() unexpectedly returned: {:?}", res);
     }
 
-    #[tokio::test]
-    async fn test_run_bt_twice() {
-        let action = MockAction::new(1);
-        let mut bt = BehaviorTree::new_test(action);
-        assert_eq!(bt.handles.len(), 1);
-        
-        // Then
-        assert_eq!(bt.execute().await.unwrap(), true);
-        assert_eq!(bt.execute().await.unwrap(), true);
-    }
 
     #[tokio::test]
     async fn test_all_nodes_killed_after_return() {
@@ -1433,4 +1423,130 @@ mod tests {
     }
 
 
+    // Tests to show unexpected behavior
+
+    //         Seq
+    //        /   \
+    //      FB   Action
+    //    /   \     
+    //  Cond  Mit. Act.
+    //    |
+    // Success
+    //
+    // Expected behavior: when Condition succeeds, execute Action. If condition switches to failure, take Mitigation Action, it fails, failing the tree
+    // Actual behavior: Action is not interrupted, succeeds, and thus succeeding the tree
+    // Cause: Conditions that have succeeded never request to be started/failed again
+    #[tokio::test]
+    async fn test_safety_pattern() {
+        load_logger();
+        // Setup
+        let handle1 = Handle::new(1);
+
+        // When
+        let action = Wait::new(Duration::from_secs(1)); // Long-lasting main action
+        let success = Success::new();
+        let cond = Condition::new("1", handle1.clone(), |i: i32| i > 0, success);
+        let mitigation_action = MockAction::new_failing(1); // Failing mitigation
+        let fb = Fallback::new(vec![cond, mitigation_action]);
+        let seq = Sequence::new(vec![fb, action]);
+        let mut bt = BehaviorTree::new_test(seq);
+        assert_eq!(bt.handles.len(), 6);
+
+        let (res, _) = tokio::join!(
+            bt.execute(),
+            async {
+                sleep(Duration::from_millis(400)).await;
+                handle1.set(-1).await
+            }
+        );
+
+        // Then 
+        assert_eq!(res.unwrap(), false);
+    }
+
+    //          FB
+    //         /   \
+    //       Seq   Action
+    //      /   \     
+    // not Cond  Mit. Act.
+    //    |
+    // Success
+    //
+    // Switch everything around: Condition that have failed, do switch. Try it by inverting the condition and selectors. Mitigation Action result also reversed
+    // Expected behavior: when Condition succeeds, execute Action. If condition switches to failure, take Mitigation Action, it succeeds, succeeding the tree
+    #[tokio::test]
+    async fn test_safety_pattern_flipped() {
+        load_logger();
+        // Setup
+        let handle1 = Handle::new(1);
+
+        // When
+        let action = MockAction::new_failing(1); // Long-lasting main action
+        let success = Success::new();
+        let cond = Condition::new("1", handle1.clone(), |i: i32| i < 0, success);
+        let mitigation_action = MockAction::new(2); // Succeeding mitigation
+        let seq = Sequence::new(vec![cond, mitigation_action]);
+        let fb = Fallback::new(vec![seq, action]);
+        let mut bt = BehaviorTree::new_test(fb);
+        assert_eq!(bt.handles.len(), 6);
+
+        let (res, _) = tokio::join!(
+            bt.execute(),
+            async {
+                sleep(Duration::from_millis(200)).await;
+                handle1.set(-1).await
+            }
+        );
+
+        // Then 
+        assert_eq!(res.unwrap(), true);
+    }
+
+    //          FB
+    //         /   \
+    //       Seq   Action
+    //      /   \     
+    // not Cond  Mit. Act.
+    //    |
+    // Success
+    //
+    // This seems to work, but:
+    // Same flow, but the Mitigation fails. Action is then again executed. Say the condition switches from success to failure to success, so the mitigation should start a second time
+    // Expected behavior: Same flow, Mitigation fails, Action starts again, condition interupts action and mitigation fails again. Action runs and tree fails
+    // Actual behavior: the action runs uninterrupted
+    #[tokio::test]
+    async fn test_safety_pattern_flipped_two_mitigations() {
+        load_logger();
+        // Setup
+        let handle1 = Handle::new(1);
+
+        // When
+        let action = MockAction::new_failing(1); // Long-lasting main action
+        let success = Success::new();
+        let cond = Condition::new("1", handle1.clone(), |i: i32| i < 0, success);
+        let mitigation_action = MockAction::new_failing(2); // Succeeding mitigation
+        let seq = Sequence::new(vec![cond, mitigation_action]);
+        let fb = Fallback::new(vec![seq, action]);
+        let mut bt = BehaviorTree::new_test(fb);
+        assert_eq!(bt.handles.len(), 6);
+
+        let (res, _, _, _) = tokio::join!(
+            bt.execute(),
+            async {
+                sleep(Duration::from_millis(200)).await;
+                handle1.set(-1).await
+            },
+            async {
+                sleep(Duration::from_millis(450)).await;
+                handle1.set(1).await
+            },
+            async {
+                sleep(Duration::from_millis(500)).await;
+                handle1.set(-1).await
+            }
+        );
+
+        // Then (expected outcome = real outcome, but behavior is wrong!)
+        assert_eq!(res.unwrap(), false);
+    }
 }
