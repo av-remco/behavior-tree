@@ -1510,7 +1510,6 @@ mod tests {
     // Cause: Conditions that have succeeded never request to be started/failed again
     #[tokio::test]
     async fn test_safety_pattern() {
-        load_logger();
         // Setup
         let handle1 = Handle::new(1);
 
@@ -1548,7 +1547,6 @@ mod tests {
     // Expected behavior: when Condition succeeds, execute Action. If condition switches to failure, take Mitigation Action, it succeeds, succeeding the tree
     #[tokio::test]
     async fn test_safety_pattern_flipped() {
-        load_logger();
         // Setup
         let handle1 = Handle::new(1);
 
@@ -1588,7 +1586,6 @@ mod tests {
     // Actual behavior: the action runs uninterrupted
     #[tokio::test]
     async fn test_safety_pattern_flipped_two_mitigations() {
-        load_logger();
         // Setup
         let handle1 = Handle::new(1);
 
