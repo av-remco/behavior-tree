@@ -51,6 +51,7 @@ pub struct SequenceProcess {
     tx: Sender<ParentMessage>,
     rx: Option<Receiver<ChildMessage>>,
     running_child: Option<usize>,
+    prio_child_on_hold: Option<usize>,
     status: Status,
     blocking: bool,
 }
@@ -99,6 +100,7 @@ impl SequenceProcess {
             tx,
             rx,
             running_child: None,
+            prio_child_on_hold: None,
             status: Status::Idle,
             blocking,
         }
@@ -172,25 +174,55 @@ impl SequenceProcess {
             ParentMessage::RequestStart => {
                 match self.status {
                     Status::Failure => self.notify_parent(ParentMessage::RequestStart)?,
-                    Status::Idle => {} // When Idle or succesful, child nodes should never become active
-                    Status::Success => {}
-                    Status::Running => {} // A request start is never valid in a running sequence
+                    Status::Idle => {} // When Idle, child nodes should never become active
+                    Status::Success => self.notify_parent(ParentMessage::RequestStart)?,
+                    Status::Running => {
+                        let Some(running_child_index) = self.running_child else {
+                            log::warn!("Sequence is running while no running child present"); // Should not happen
+                            return Ok(());
+                        };
+
+                        // If already on hold, and the current request is higher prio, swap them out
+                        // We don't need to stop the child again, as you are sure that the running child has been notified
+                        if let Some(prio_child_on_hold) = self.prio_child_on_hold {
+                            if child_index <= prio_child_on_hold {
+                                self.prio_child_on_hold = Some(child_index); // Overwrite current one on hold
+                            }
+                            return Ok(());
+                        }
+
+                        // If no prio on hold already, notify the running child to stop and set the prio on hold
+                        if child_index <= running_child_index {
+                            self.notify_child(running_child_index, ChildMessage::Stop)?; // Stop current child
+                            self.prio_child_on_hold = Some(child_index); // Set new child on hold
+                        }
+                    }
                 }
             }
             ParentMessage::Status(status) => {
                 match status {
                     Status::Success => {
                         if self.status.is_running() {
-                            if let Some(current_child_index) = self.running_child {
-                                if child_index != current_child_index {
-                                    // TODO make this into a result
-                                    log::warn!("Received a succes message from a child that is not equal to the running child!")
-                                }
-                                if current_child_index < (self.children.len() - 1) {
-                                    self.start_child(child_index + 1)?; // Start next in sequence
-                                } else {
-                                    self.update_status(Status::Success)?; // The sequence has completed
-                                }
+                            let Some(running_child_index) = self.running_child else {
+                                log::warn!("Sequence is running while no running child present"); // Should not happen
+                                return Ok(());
+                            };
+
+                            if child_index != running_child_index {
+                                return Ok(()); // Received a success from a child that is not running, so ignore the message
+                            }
+
+                            // If the running child stopped, start
+                            // 1) A prio child if available
+                            // 2) The next in the sequence if not exhausted
+                            // 3) Fail the fallback completely
+                            if let Some(prio_child_on_hold) = self.prio_child_on_hold {
+                                self.prio_child_on_hold = None; // Clear the waiting child
+                                self.start_child(prio_child_on_hold)?; // Start the previously failed but prio child
+                            } else if child_index < (self.children.len() - 1) {
+                                self.start_child(child_index + 1)?; // Start next in sequence
+                            } else {
+                                self.update_status(Status::Success)?; // The sequence has completed
                             }
                         } else if self.status.is_idle() {
                             // This occurs when the sequence has been stopped, and is waiting for confirmation

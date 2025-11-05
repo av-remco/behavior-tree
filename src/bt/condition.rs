@@ -216,8 +216,6 @@ where
         &mut self,
         val: Result<V, CacheRecvNewestError>,
     ) -> Result<(), NodeError> {
-        // If its running but the function evaluates to false, then fail
-        // If it failed but function evaluates to true, then request start
 
         // Skip errors
         let val = match val {
@@ -228,15 +226,25 @@ where
             Ok(v) => v,
         };
 
-        if self.status.is_running() && !self.run_evaluator(val.clone()).await? {
-            let status = self.stop_workflow().await?;
-            self.update_status(status)?;
-        } else if self.status.is_failure()
-            && !self.prev_evaluation
-            && self.run_evaluator(val).await?
-        {
-            // Only when a value has changed compared to the previous evaluation a request start is necessary
-            self.notify_parent(ParentMessage::RequestStart)?
+        match self.status {
+            Status::Running => {
+                if !self.run_evaluator(val.clone()).await? {
+                    let status = self.stop_workflow().await?;
+                    self.update_status(status)?;
+                }
+            }
+            Status::Failure => {
+                if !self.prev_evaluation && self.run_evaluator(val.clone()).await? {
+                    self.notify_parent(ParentMessage::RequestStart)?
+                }
+            }
+            Status::Success => {
+                if self.prev_evaluation && !self.run_evaluator(val.clone()).await? 
+                    && !self.child.is_none() { // To keep the OneTimeCondition functionality
+                    self.notify_parent(ParentMessage::RequestStart)?
+                }
+            }
+            Status::Idle => {}
         }
         Ok(())
     }

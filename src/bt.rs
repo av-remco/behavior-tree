@@ -1363,10 +1363,9 @@ mod tests {
         assert!(res.is_err(), "bt.run() unexpectedly returned: {:?}", res);
     }
 
-
     #[tokio::test]
     async fn test_all_nodes_killed_after_return() {
-        let action = MockAction::new(1);
+        let action = MockAction::new(123456);
         let mut bt = BehaviorTree::new_test(action);
 
         let logger = Logger::start();
@@ -1374,15 +1373,15 @@ mod tests {
 
         let logs: Vec<_> = logger.collect();
 
-        // filter all logs mentioning node "1"
+        // filter all logs mentioning node 123456
         let node_logs: Vec<_> = logs
             .iter()
-            .filter(|rec| rec.args().contains("1")) // adjust to match how the repo formats
+            .filter(|rec| rec.args().contains("123456")) // adjust to match how the repo formats
             .collect();
 
         assert!(
             !node_logs.is_empty(),
-            "No logs found for action 1. Logs: {:?}",
+            "No logs found for action. Logs: {:?}",
             logs
         );
 
@@ -1390,8 +1389,8 @@ mod tests {
         let last = node_logs.last().unwrap();
         assert!(
             last.args().contains("Killed"),
-            "Expected final state Killed for Action 1, got: {}",
-            last.args()
+            "Expected final state Killed for Action, got: {:?}",
+            node_logs
         );
     }
 
@@ -1422,7 +1421,80 @@ mod tests {
         }
     }
 
+    //      Seq
+    //     /   \
+    //   Seq  Action2
+    //    |  
+    //   FB
+    //    |  
+    //  Cond1
+    //    |  
+    // Action1 
+    // pass cond1, pass action1, cond1 fails during action2, seq fails
+    // finished selectors do not block the switch
+    #[tokio::test]
+    async fn test_sequence_failing_succeeded_condition() {
+        // Setup
+        let handle1 = Handle::new(1);
 
+        // When
+        let action1 = MockAction::new(1);
+        let cond1 = Condition::new("1", handle1.clone(), |i: i32| i > 0, action1);
+        let action2 = Wait::new(Duration::from_millis(200));
+        let subfb = Fallback::new(vec![cond1]);
+        let subsq = Sequence::new(vec![subfb]);
+        let sq = Sequence::new(vec![subsq, action2]);
+        let mut bt = BehaviorTree::new_test(sq);
+        assert_eq!(bt.handles.len(), 6);
+
+        let (res, _) = tokio::join!(
+            bt.execute(),
+            async {
+                sleep(Duration::from_millis(600)).await;
+                handle1.set(-1).await;
+            }
+        );
+
+        // Then
+        assert_eq!(res.unwrap(), false);
+    }
+
+    //       FB
+    //     /   \
+    //   Seq  Action2
+    //    |  
+    //   FB
+    //    |  
+    //  Cond1
+    //    |  
+    // Action1    
+    // fail cond1, cond1 passes during action2, action1 passes, FB passes
+    #[tokio::test]
+    async fn test_fallback_passing_failed_condition() {
+        // Setup
+        let handle1 = Handle::new(-1);
+
+        // When
+        let action1 = MockAction::new(1);
+        let cond1 = Condition::new("1", handle1.clone(), |i: i32| i > 0, action1);
+        let action2 = MockAction::new_failing(2);
+        let subfb = Fallback::new(vec![cond1]);
+        let sq = Sequence::new(vec![subfb]);
+        let fb = Fallback::new(vec![sq, action2]);
+        let mut bt = BehaviorTree::new_test(fb);
+        assert_eq!(bt.handles.len(), 6);
+
+        let (res, _) = tokio::join!(
+            bt.execute(),
+            async {
+                sleep(Duration::from_millis(400)).await;
+                handle1.set(1).await;
+            }
+        );
+
+        // Then
+        assert_eq!(res.unwrap(), true);
+    }
     // Tests to show unexpected behavior
 
     //         Seq
