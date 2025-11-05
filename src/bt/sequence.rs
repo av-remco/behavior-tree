@@ -243,6 +243,7 @@ impl SequenceProcess {
                             if let Some(prio_child_on_hold) = self.prio_child_on_hold {
                                 self.prio_child_on_hold = None; // Clear the waiting child
                                 self.start_child(prio_child_on_hold)?; // Start the previously failed but prio child
+                                return Ok(());
                             }
                         }
                         self.update_status(Status::Failure)?
