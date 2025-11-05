@@ -234,7 +234,7 @@ impl SequenceProcess {
                                     }
                                 }
                             },
-                            Status::Failure => log::warn!("Unexpected failure status received from child node"),
+                            Status::Failure => self.notify_parent(ParentMessage::Status(Status::Failure))?,
                         }
                     },
                     Status::Idle => log::warn!("Unexpected idle status received from child node"),
