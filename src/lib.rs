@@ -26,3 +26,6 @@ pub(crate) mod logging {
             .init();
     }
 }
+
+#[cfg(test)]
+mod bt_tests;
