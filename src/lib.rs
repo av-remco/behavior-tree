@@ -10,7 +10,6 @@ pub use crate::bt::{
     fallback::{BlockingFallback, Fallback},
     handle::{NodeError, NodeHandle},
     listener::{OuterStatus as Status, Update},
-    loop_dec::LoopDecorator,
     sequence::{BlockingSequence, Sequence},
 };
 

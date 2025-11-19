@@ -20,7 +20,6 @@ pub mod condition;
 pub mod fallback;
 pub mod handle;
 pub mod listener;
-pub mod loop_dec;
 pub mod sequence;
 
 pub struct BehaviorTree {
@@ -282,7 +281,6 @@ mod tests {
         action::{Failure, Success},
         condition::{Condition, OneTimeCondition},
         fallback::Fallback,
-        loop_dec::LoopDecorator,
         sequence::Sequence,
     };
     use crate::bt::action::mocking::MockAction;
@@ -554,66 +552,6 @@ mod tests {
         for (index, status) in goal_statuses.iter().enumerate() {
             assert_eq!(status, &received_statuses[index])
         }
-    }
-
-    //  Loop
-    //    |
-    // Action1
-    //
-    // Loop repeats, tests terminates without bt completion
-    #[tokio::test]
-    async fn test_loop_does_not_exit() {
-        // Setup
-        let timer = sleep(Duration::from_millis(1000));
-        tokio::pin!(timer);
-
-        // When
-        let action1 = MockAction::new(1);
-        let bt_loop = LoopDecorator::new("1", action1, 100);
-        let mut bt = BehaviorTree::new_test(bt_loop);
-
-        let res = tokio::select! {
-            _ = &mut timer => {None}
-            res = bt.run_once() => {Some(res)}
-        };
-
-        // Then
-        assert!(res.is_none());
-    }
-
-    //  Cond1
-    //    |
-    //  Loop
-    //    |
-    // Action1
-    //
-    // Loop repeats, tests terminates without bt completion
-    #[tokio::test]
-    async fn test_loop_is_stopped() {
-        // Setup
-        let handle = Handle::<i32>::new(1);
-        let timer = sleep(Duration::from_millis(1000));
-        tokio::pin!(timer);
-
-        // When
-        let action1 = MockAction::new(1);
-        let bt_loop = LoopDecorator::new("1", action1, 100);
-        let cond1 = Condition::new("1", handle.clone(), |x| x > 0, bt_loop);
-        let mut bt = BehaviorTree::new_test(cond1);
-        assert_eq!(bt.handles.len(), 3);
-
-        let res = tokio::select! {
-            _ = &mut timer => {None}
-            res = bt.run_once() => {Some(res)}
-            _ = async {
-                sleep(Duration::from_millis(200)).await;
-                _ = handle.set(-1).await;
-                sleep(Duration::from_millis(1000)).await;
-            }  => {None}
-        };
-
-        // Then
-        assert_eq!(res.unwrap().unwrap(), Status::Failure);
     }
 
     //  Cond1
