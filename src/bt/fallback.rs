@@ -19,30 +19,14 @@ pub struct Fallback {}
 impl Fallback {
     pub fn new(children: Vec<NodeHandle>) -> NodeHandle {
         let name = String::from("default_fallback");
-        FallbackProcess::new(children, name, false)
+        FallbackProcess::new(children, name)
     }
 
     pub fn new_with_name<S: Into<String> + Clone>(
         name: S,
         children: Vec<NodeHandle>,
     ) -> NodeHandle {
-        FallbackProcess::new(children, name.into(), false)
-    }
-}
-
-pub struct BlockingFallback {}
-
-impl BlockingFallback {
-    pub fn new(children: Vec<NodeHandle>) -> NodeHandle {
-        let name = String::from("default_fallback");
-        FallbackProcess::new(children, name, true)
-    }
-
-    pub fn new_with_name<S: Into<String> + Clone>(
-        name: S,
-        children: Vec<NodeHandle>,
-    ) -> NodeHandle {
-        FallbackProcess::new(children, name.into(), true)
+        FallbackProcess::new(children, name.into())
     }
 }
 
@@ -54,11 +38,10 @@ pub struct FallbackProcess {
     running_child: Option<usize>,
     prio_child_on_hold: Option<usize>,
     status: Status,
-    blocking: bool,
 }
 
 impl FallbackProcess {
-    pub fn new(mut children: Vec<NodeHandle>, name: String, blocking: bool) -> NodeHandle {
+    pub fn new(mut children: Vec<NodeHandle>, name: String) -> NodeHandle {
         let (parent_tx, parent_rx) = channel(CHANNEL_SIZE);
         let (child_tx, child_rx) = channel(CHANNEL_SIZE);
 
@@ -73,7 +56,6 @@ impl FallbackProcess {
             children,
             parent_tx.clone(),
             Some(child_rx),
-            blocking,
         );
         tokio::spawn(Self::serve(node));
 
@@ -93,7 +75,6 @@ impl FallbackProcess {
         children: Vec<NodeHandle>,
         tx: Sender<ParentMessage>,
         rx: Option<Receiver<ChildMessage>>,
-        blocking: bool,
     ) -> Self {
         Self {
             name,
@@ -103,7 +84,6 @@ impl FallbackProcess {
             running_child: None,
             prio_child_on_hold: None,
             status: Status::Idle,
-            blocking,
         }
     }
 
@@ -154,7 +134,7 @@ impl FallbackProcess {
                 }
             }
             ChildMessage::Stop => {
-                if self.status.is_running() && !self.blocking {
+                if self.status.is_running() {
                     if let Some(child_index) = self.running_child {
                         self.status = Status::Idle;
                         self.notify_child(child_index, ChildMessage::Stop)?;

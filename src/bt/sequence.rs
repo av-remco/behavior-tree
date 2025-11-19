@@ -18,30 +18,14 @@ pub struct Sequence {}
 impl Sequence {
     pub fn new(children: Vec<NodeHandle>) -> NodeHandle {
         let name = String::from("default_sequence");
-        SequenceProcess::new(children, name, false)
+        SequenceProcess::new(children, name)
     }
 
     pub fn new_with_name<S: Into<String> + Clone>(
         name: S,
         children: Vec<NodeHandle>,
     ) -> NodeHandle {
-        SequenceProcess::new(children, name.into(), false)
-    }
-}
-
-pub struct BlockingSequence {}
-
-impl BlockingSequence {
-    pub fn new(children: Vec<NodeHandle>) -> NodeHandle {
-        let name = String::from("default_sequence");
-        SequenceProcess::new(children, name, true)
-    }
-
-    pub fn new_with_name<S: Into<String> + Clone>(
-        name: S,
-        children: Vec<NodeHandle>,
-    ) -> NodeHandle {
-        SequenceProcess::new(children, name.into(), true)
+        SequenceProcess::new(children, name.into())
     }
 }
 
@@ -53,11 +37,10 @@ pub struct SequenceProcess {
     running_child: Option<usize>,
     prio_child_on_hold: Option<usize>,
     status: Status,
-    blocking: bool,
 }
 
 impl SequenceProcess {
-    fn new(mut children: Vec<NodeHandle>, name: String, blocking: bool) -> NodeHandle {
+    fn new(mut children: Vec<NodeHandle>, name: String) -> NodeHandle {
         let (parent_tx, parent_rx) = channel(CHANNEL_SIZE);
         let (child_tx, child_rx) = channel(CHANNEL_SIZE);
 
@@ -72,7 +55,6 @@ impl SequenceProcess {
             children,
             child_tx.clone(),
             Some(parent_rx),
-            blocking,
         );
         tokio::spawn(Self::serve(node));
 
@@ -92,7 +74,6 @@ impl SequenceProcess {
         children: Vec<NodeHandle>,
         tx: Sender<ParentMessage>,
         rx: Option<Receiver<ChildMessage>>,
-        blocking: bool,
     ) -> Self {
         Self {
             name,
@@ -102,7 +83,6 @@ impl SequenceProcess {
             running_child: None,
             prio_child_on_hold: None,
             status: Status::Idle,
-            blocking,
         }
     }
 
@@ -153,7 +133,7 @@ impl SequenceProcess {
                 }
             }
             ChildMessage::Stop => {
-                if self.status.is_running() && !self.blocking {
+                if self.status.is_running() {
                     if let Some(child_index) = self.running_child {
                         self.status = Status::Idle;
                         self.notify_child(child_index, ChildMessage::Stop)?;
@@ -327,7 +307,7 @@ mod tests {
 
         let (node_tx, _) = channel(CHANNEL_SIZE); // Only needed for construction, as a handle is not useful here
         let mut seq =
-            SequenceProcess::_new(String::from("some name"), children, node_tx, None, false);
+            SequenceProcess::_new(String::from("some name"), children, node_tx, None);
 
         // When
         let mut futures = seq.extract_futures();

@@ -7,10 +7,10 @@ pub use crate::bt::BehaviorTree;
 pub use crate::bt::{
     action::{Action, Executor, Failure, Success, Wait},
     condition::{Condition, Evaluator, OneTimeCondition},
-    fallback::{BlockingFallback, Fallback},
+    fallback::{Fallback},
     handle::{NodeError, NodeHandle},
     listener::{OuterStatus as Status, Update},
-    sequence::{BlockingSequence, Sequence},
+    sequence::{Sequence},
 };
 
 #[cfg(test)]
