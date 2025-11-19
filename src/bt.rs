@@ -285,7 +285,7 @@ mod tests {
         loop_dec::LoopDecorator,
         sequence::Sequence,
     };
-    use crate::bt::action::mocking::{MockAction, MockBlockingAction, MockRunBlockingOnce};
+    use crate::bt::action::mocking::MockAction;
     use crate::bt::condition::mocking::MockAsyncCondition;
     use crate::logging::load_logger;
     use crate::{BlockingFallback, BlockingSequence, Wait};
@@ -382,14 +382,14 @@ mod tests {
         let handle = Handle::new(1);
 
         // When
-        let action1 = MockBlockingAction::new_error(1);
+        let action1 = MockAction::new_error(1);
         let cond1 = Condition::new("1", handle.clone(), |i: i32| i > 0, action1);
 
         let mut bt = BehaviorTree::new_test(cond1);
 
         let (res, _) = tokio::join!(bt.run_once(), async {
             sleep(Duration::from_millis(200)).await;
-            handle.set(-1).await // Condition asks action to stop
+            // handle.set(-1).await // Condition asks action to stop
         });
 
         // Then
@@ -426,49 +426,6 @@ mod tests {
 
         // Then
         assert_eq!(res.unwrap(), Status::Success);
-    }
-
-    //  Cond1
-    //    |
-    // Action1
-    //
-    // Cond1 passes, cond1 fails during Action1, BT still succesful
-    #[tokio::test]
-    async fn test_force_action_completion() {
-        // Setup
-        let handle = Handle::new(1);
-
-        // When
-        let action1 = MockBlockingAction::new(1);
-        let cond1 = Condition::new("1", handle.clone(), |x| x > 0, action1);
-        let mut bt = BehaviorTree::new_test(cond1);
-
-        let (res, _) = tokio::join!(bt.run_once(), async {
-            sleep(Duration::from_millis(200)).await;
-            handle.set(-1).await
-        });
-
-        // Then
-        assert_eq!(res.unwrap(), Status::Success);
-    }
-
-    // Action1
-    //
-    // BT kill works on blocking action
-    #[tokio::test]
-    async fn test_kill_blocking_action() {
-        // When
-        let action1 = MockBlockingAction::new_loop(1);
-        let mut bt = BehaviorTree::new_test(action1);
-
-        tokio::select! {
-            _ = bt.run() => {}
-            _ = async {
-                sleep(Duration::from_millis(1000)).await;
-            } => {}
-        }
-
-        bt.kill().await;
     }
 
     //  Cond1
@@ -556,30 +513,6 @@ mod tests {
 
         // Then
         assert_eq!(bt.run_once().await.unwrap(), Status::Failure);
-    }
-
-    //  Cond1
-    //    |
-    // Action1
-    //
-    // Cond1 passes, cond1 fails during Action1, BT still succesful
-    #[tokio::test]
-    async fn test_prohibit_double_blocking_execution() {
-        // Setup
-        let handle = Handle::new(1);
-
-        // When
-        let action1 = MockRunBlockingOnce::new(1);
-        let cond1 = Condition::new("1", handle.clone(), |x| x > 0, action1);
-        let mut bt = BehaviorTree::new_test(cond1);
-
-        let (res, _) = tokio::join!(bt.run_once(), async {
-            sleep(Duration::from_millis(200)).await;
-            handle.set(-1).await
-        });
-
-        // Then
-        assert_eq!(res.unwrap(), Status::Success);
     }
 
     //  Cond1
@@ -809,34 +742,6 @@ mod tests {
         let (res, _) = tokio::join!(bt.run_once(), async {
             sleep(Duration::from_millis(200)).await;
             handle.set(1).await
-        });
-
-        // Then
-        assert_eq!(res.unwrap(), Status::Success);
-    }
-
-    //     Cond1
-    //       |
-    //      Seq
-    //     /   \
-    //  Action1  Action2
-    //
-    // pass cond1, during action2 fail cond1, pass seq
-    #[tokio::test]
-    async fn test_finish_stopped_sequence_with_last_blocking_action() {
-        // Setup
-        let handle = Handle::new(1);
-
-        // When
-        let action1 = MockAction::new(1);
-        let action2 = MockBlockingAction::new(2);
-        let seq = Sequence::new(vec![action1, action2]);
-        let cond1 = Condition::new("1", handle.clone(), |i: i32| i > 0, seq);
-        let mut bt = BehaviorTree::new_test(cond1);
-
-        let (res, _) = tokio::join!(bt.run_once(), async {
-            sleep(Duration::from_millis(600)).await;
-            handle.set(-1).await
         });
 
         // Then

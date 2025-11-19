@@ -5,7 +5,7 @@ mod ws;
 
 pub use crate::bt::BehaviorTree;
 pub use crate::bt::{
-    action::{Action, BlockingAction, Executor, Failure, Success, Wait},
+    action::{Action, Executor, Failure, Success, Wait},
     condition::{Condition, Evaluator, OneTimeCondition},
     fallback::{BlockingFallback, Fallback},
     handle::{NodeError, NodeHandle},

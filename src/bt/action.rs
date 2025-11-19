@@ -21,18 +21,7 @@ impl Action {
     where
         T: Executor + Send + Sync + 'static,
     {
-        ActionProcess::new(inner, false)
-    }
-}
-
-pub struct BlockingAction {}
-
-impl BlockingAction {
-    pub fn new<T>(inner: T) -> NodeHandle
-    where
-        T: Executor + Send + Sync + 'static,
-    {
-        ActionProcess::new(inner, true)
+        ActionProcess::new(inner)
     }
 }
 
@@ -42,7 +31,6 @@ where
 {
     tx: Sender<ParentMessage>,
     rx: Option<Receiver<ChildMessage>>,
-    blocking: bool,
     status: Status,
     inner: T,
 }
@@ -51,12 +39,12 @@ impl<T> ActionProcess<T>
 where
     T: Executor + Send + Sync + 'static,
 {
-    pub fn new(inner: T, blocking: bool) -> NodeHandle {
+    pub fn new(inner: T) -> NodeHandle {
         let (parent_tx, parent_rx) = channel(CHANNEL_SIZE);
         let (child_tx, child_rx) = channel(CHANNEL_SIZE);
 
         let name = inner.get_name();
-        let node = Self::_new(parent_tx.clone(), child_rx, inner, blocking);
+        let node = Self::_new(parent_tx.clone(), child_rx, inner);
         tokio::spawn(Self::serve(node));
 
         NodeHandle::new(child_tx, parent_rx, "Action", name, vec![], vec![], vec![])
@@ -66,12 +54,10 @@ where
         tx: Sender<ParentMessage>,
         rx: Receiver<ChildMessage>,
         inner: T,
-        blocking: bool,
     ) -> Self {
         Self {
             tx,
             rx: Some(rx),
-            blocking,
             status: Status::Idle,
             inner,
         }
@@ -98,17 +84,11 @@ where
             return Err(NodeError::KillError);
         }
 
-        if self.status.is_running() && self.blocking {
-            return Ok(()); // This should never happen as it should not even process the message?
-        }
-
         match msg {
             ChildMessage::Start => self.update_status(Status::Running).await?,
             ChildMessage::Stop => {
-                if !self.blocking {
-                    // This should never happen as it should not even process the message?
-                    self.update_status(Status::Failure).await?
-                }
+                // This should never happen as it should not even process the message?
+                self.update_status(Status::Failure).await?
             }
             _ => {}
         }
@@ -127,16 +107,10 @@ where
     }
 
     async fn listen_for_parent_msg(
-        is_blocking: bool,
-        is_running: bool,
         rx: &mut Receiver<ChildMessage>,
     ) -> Option<ChildMessage> {
         while let Ok(msg) = rx.recv().await {
-            if is_running && is_blocking && !msg.is_kill() {
-                continue;
-            } else {
-                return Some(msg); // If it needs to be stopped immediately, pass each message directly
-            }
+            return Some(msg); // If it needs to be stopped immediately, pass each message directly
         }
         None
     }
@@ -145,7 +119,7 @@ where
         let mut rx = self.rx.take().unwrap(); // To take ownership
         loop {
             tokio::select! {
-                Some(msg) =  ActionProcess::<T>::listen_for_parent_msg(self.blocking, self.status.is_running(), &mut rx) => self.process_msg_from_parent(msg).await?,
+                Some(msg) =  ActionProcess::<T>::listen_for_parent_msg(&mut rx) => self.process_msg_from_parent(msg).await?,
                 res = ActionProcess::execute(&mut self.inner, self.status.is_running()) => match res.map_err(|e| NodeError::ExecutionError(e.to_string()))? {
                     true => self.update_status(Status::Success).await?,
                     false => self.update_status(Status::Failure).await?
@@ -266,7 +240,7 @@ pub(crate) mod mocking {
     use anyhow::{anyhow, Result};
     use tokio::time::{sleep, Duration};
 
-    use super::{Action, BlockingAction, Executor};
+    use super::{Action, Executor};
     use crate::bt::handle::NodeHandle;
 
     // The Mock action is intended to completely mock all logic of a normal action, but does not execute anything complex.
@@ -341,98 +315,6 @@ pub(crate) mod mocking {
                 Ok(self.calls < 2)
             } else {
                 Ok(self.succeed)
-            }
-        }
-    }
-
-    // Same for Mock blocking, which cannot be stopped during execution
-    pub struct MockBlockingAction {
-        name: String,
-        succeed: bool,
-        throw_error: bool,
-        keep_looping: bool,
-    }
-
-    #[allow(dead_code)]
-    impl MockBlockingAction {
-        pub fn new(id: i32) -> NodeHandle {
-            BlockingAction::new(Self::_new(id, true, false, false))
-        }
-
-        pub fn new_loop(id: i32) -> NodeHandle {
-            BlockingAction::new(Self::_new(id, true, false, true))
-        }
-
-        pub fn new_failing(id: i32) -> NodeHandle {
-            BlockingAction::new(Self::_new(id, false, false, false))
-        }
-
-        pub fn new_error(id: i32) -> NodeHandle {
-            BlockingAction::new(Self::_new(id, true, true, false))
-        }
-
-        fn _new(id: i32, succeed: bool, throw_error: bool, keep_looping: bool) -> Self {
-            Self {
-                name: id.to_string(),
-                succeed,
-                throw_error,
-                keep_looping,
-            }
-        }
-    }
-
-    impl Executor for MockBlockingAction {
-        fn get_name(&self) -> String {
-            self.name.clone()
-        }
-
-        async fn execute(&mut self) -> Result<bool> {
-            loop {
-                sleep(Duration::from_millis(500)).await;
-
-                if !self.keep_looping {
-                    break;
-                }
-            }
-            if self.throw_error {
-                Err(anyhow!("Some testing error!"))
-            } else {
-                Ok(self.succeed)
-            }
-        }
-    }
-
-    // Run one fails if called multiple times
-    pub struct MockRunBlockingOnce {
-        name: String,
-        called: bool,
-    }
-
-    impl MockRunBlockingOnce {
-        pub fn new(id: i32) -> NodeHandle {
-            BlockingAction::new(Self::_new(id))
-        }
-
-        fn _new(id: i32) -> Self {
-            Self {
-                name: id.to_string(),
-                called: false,
-            }
-        }
-    }
-
-    impl Executor for MockRunBlockingOnce {
-        fn get_name(&self) -> String {
-            self.name.clone()
-        }
-
-        async fn execute(&mut self) -> Result<bool> {
-            if self.called {
-                Ok(false) // Return when already called
-            } else {
-                self.called = true;
-                sleep(Duration::from_millis(500)).await;
-                Ok(true)
             }
         }
     }
