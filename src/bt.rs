@@ -4,16 +4,15 @@ use simple_xml_builder::XMLElement;
 use std::fs::File;
 
 use tokio::sync::mpsc::{channel, Receiver, Sender};
-use tokio::time::{sleep, Duration};
 
 use handle::{ChildMessage, NodeError, NodeHandle, ParentMessage, Status};
-use listener::{Listener, Update};
+use listener::Update;
 
+use crate::bt::listener::Listener;
 #[cfg(feature = "websocket")]
 use crate::ws::socket_connector::SocketConnector;
 
 const CHANNEL_SIZE: usize = 20;
-const BT_SUCCESS_LOOP_TIME: u64 = 1000; // [ms]
 
 pub mod action;
 pub mod condition;
@@ -85,6 +84,9 @@ impl BehaviorTree {
     // Execute the BT.
     // Upon Success resp. Failure, kills the tree and returns true resp. false
     pub async fn execute(&mut self) -> Result<bool, NodeError> {
+        let mut listener: Listener =
+            Listener::new(self.name.clone(), self.handles.clone(), self.tx.clone());
+        tokio::spawn(async move { listener.run_listeners().await });
         self.root_node.send(ChildMessage::Start)?;
         log::debug!("Root - notify child {:?}: {:?}", self.root_node.name, ChildMessage::Start);
         self.status = Status::Running;
@@ -110,23 +112,6 @@ impl BehaviorTree {
         }
     }
 
-    // Run continuously
-    pub async fn run(&mut self) -> NodeError {
-        log::debug!("Starting BT from {:?}", self.root_node.name);
-        let mut listener: Listener =
-            Listener::new(self.name.clone(), self.handles.clone(), self.tx.clone());
-        tokio::spawn(async move { listener.run_listeners().await });
-        loop {
-            if let Err(e) = self.start().await {
-                log::warn!("BT crashed: {:?} ", e);
-                self.kill().await;
-            } else {
-                log::debug!("BT exited succesfully - restarting again");
-                sleep(Duration::from_millis(BT_SUCCESS_LOOP_TIME)).await;
-            }
-        }
-    }
-
     pub async fn kill(&mut self) {
         for handle in &mut self.handles {
             log::debug!("Killing {} {:?}", handle.element, handle.name);
@@ -146,55 +131,6 @@ impl BehaviorTree {
             Err(anyhow!("The behavior tree contained non-unique IDs"))
         } else {
             Ok(())
-        }
-    }
-
-    /// Starts the BT.
-    /// Upon failure, it will wait for any request starts based on async updated of the conditions
-    /// Upon success, it will exit
-    pub async fn start(&mut self) -> Result<(), NodeError> {
-        self.root_node.send(ChildMessage::Start)?;
-        self.status = Status::Running;
-        loop {
-            match self.root_node.listen().await? {
-                ParentMessage::Status(status) => match status {
-                    Status::Success => return Ok(()),
-                    Status::Failure => self.status = Status::Failure,
-                    _ => {} // Running or idle do not lead to updates for the root node
-                },
-                ParentMessage::RequestStart => {
-                    match self.status {
-                        Status::Failure => {
-                            self.root_node.send(ChildMessage::Start)?;
-                            self.status = Status::Running;
-                        }
-                        Status::Running => {
-                            log::warn!("BT is running while the child is making a start request")
-                        }
-                        _ => {} // The BT can never be idle here, and it exits upon success
-                    }
-                }
-                ParentMessage::Poison(err) => return Err(err),
-                ParentMessage::Killed => return Err(NodeError::KillError), // This should not occur
-            }
-        }
-    }
-
-    #[cfg(test)]
-    /// A method specifically for testing, which allows to directly read any errors or a result from the BT
-    pub async fn run_once(&mut self) -> Result<Status, NodeError> {
-        self.root_node.send(ChildMessage::Start)?;
-        loop {
-            match self.root_node.listen().await? {
-                ParentMessage::Status(status) => match status {
-                    Status::Success => return Ok(status),
-                    Status::Failure => return Ok(status),
-                    _ => {}
-                },
-                ParentMessage::RequestStart => panic!("Invalid message"),
-                ParentMessage::Poison(err) => return Err(err),
-                ParentMessage::Killed => return Err(NodeError::KillError), // This should not occur
-            }
         }
     }
 

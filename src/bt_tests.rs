@@ -2,6 +2,7 @@
 #[allow(unused_imports)]
 mod tests {
     use actify::Handle;
+    use log::warn;
     use tokio::sync::mpsc::Receiver;
     use crate::bt::handle::Status;
     use crate::{BehaviorTree, NodeError, NodeHandle, Update};
@@ -77,30 +78,29 @@ mod tests {
 
     #[tokio::test]
     async fn test_killing_bt() {
-        // Setup
         let handle = Handle::new(-1);
 
-        // When
         let action = MockAction::new(1);
         let cond = Condition::new("1", handle.clone(), |i: i32| i > 0, action);
         let mut bt = BehaviorTree::new_test(cond);
 
+        // Run execute once with timeout
         let timer = sleep(Duration::from_millis(200));
         tokio::pin!(timer);
         tokio::select! {
-            _ = &mut timer => {None}
-            res = bt.run() => {Some(res)}
+            _ = &mut timer => {}
+            res = bt.execute() => { let _ = res; }
         };
 
         sleep(Duration::from_millis(200)).await;
         bt.kill().await;
 
-        println!("Setting condition");
         handle.set(1).await;
         sleep(Duration::from_millis(200)).await;
 
-        // TODO some assert that the tree is not reacting to the value of the condition being changed?
+        // TODO: assert BT does not react
     }
+
 
     //  Cond1
     //    |
@@ -108,21 +108,20 @@ mod tests {
     // Pass cond1, throw error in Action, cond1 handles error while in stop
     #[tokio::test]
     async fn test_poison_while_stopping() {
-        // Setup
         let handle = Handle::new(1);
 
-        // When
         let action1 = MockAction::new_error(1);
         let cond1 = Condition::new("1", handle.clone(), |i: i32| i > 0, action1);
-
         let mut bt = BehaviorTree::new_test(cond1);
 
-        let (res, _) = tokio::join!(bt.run_once(), async {
-            sleep(Duration::from_millis(200)).await;
-            // handle.set(-1).await // Condition asks action to stop
-        });
+        let (res, _) = tokio::join!(
+            bt.execute(),
+            async {
+                sleep(Duration::from_millis(200)).await;
+                // handle.set(-1).await   // same comment
+            }
+        );
 
-        // Then
         assert!(matches!(res.unwrap_err(), NodeError::PoisonError(_)));
     }
 
@@ -136,10 +135,8 @@ mod tests {
     //  Fail cond1, Start Action2, cond1 request start, seq success
     #[tokio::test]
     async fn test_sequence_request_start_while_failed() {
-        // Setup
         let handle = Handle::new(-1);
 
-        // When
         let action1 = MockAction::new(1);
         let cond1 = Condition::new("1", handle.clone(), |i: i32| i > 0, action1);
         let seq = Sequence::new(vec![cond1]);
@@ -148,13 +145,15 @@ mod tests {
         let fb = Fallback::new(vec![seq, action2]);
         let mut bt = BehaviorTree::new_test(fb);
 
-        let (res, _) = tokio::join!(bt.run_once(), async {
-            sleep(Duration::from_millis(200)).await;
-            handle.set(1).await
-        });
+        let (res, _) = tokio::join!(
+            bt.execute(),
+            async {
+                sleep(Duration::from_millis(200)).await;
+                handle.set(1).await
+            }
+        );
 
-        // Then
-        assert_eq!(res.unwrap(), Status::Success);
+        assert_eq!(res.unwrap(), true);
     }
 
     //  Cond1
@@ -162,16 +161,13 @@ mod tests {
     // Action1
     #[tokio::test]
     async fn test_auto_success() {
-        // Setup
         let handle = Handle::new(1);
 
-        // When
         let action1 = Success::new();
         let cond1 = Condition::new("1", handle.clone(), |x| x > 0, action1);
         let mut bt = BehaviorTree::new_test(cond1);
 
-        // Then
-        assert_eq!(bt.run_once().await.unwrap(), Status::Success);
+        assert_eq!(bt.execute().await.unwrap(), true);
     }
 
     //  Cond1
@@ -179,20 +175,20 @@ mod tests {
     // Action1
     #[tokio::test]
     async fn test_root_restart_after_request() {
-        // Setup
         let handle = Handle::new(-1);
 
-        // When
         let action1 = Success::new();
-        let cond1: NodeHandle = Condition::new("1", handle.clone(), |x| x > 0, action1);
+        let cond1 = Condition::new("1", handle.clone(), |x| x > 0, action1);
         let mut bt = BehaviorTree::new_test(cond1);
 
-        let (res, _) = tokio::join!(bt.start(), async {
-            sleep(Duration::from_millis(200)).await;
-            handle.set(1).await
-        });
+        let (res, _) = tokio::join!(
+            bt.execute(),
+            async {
+                sleep(Duration::from_millis(200)).await;
+                handle.set(1).await;
+            }
+        );
 
-        // Then
         assert!(res.is_ok());
     }
 
@@ -218,13 +214,13 @@ mod tests {
         let fb = Fallback::new(vec![cond1, action2]);
         let mut bt = BehaviorTree::new_test(fb);
 
-        let (res, _) = tokio::join!(bt.run_once(), async {
+        let (res, _) = tokio::join!(bt.execute(), async {
             sleep(Duration::from_millis(200)).await;
             handle1.set(1).await // This value was already ok, but it should not lead to a request start, as it was already ok
         });
 
         // Then
-        assert_eq!(res.unwrap(), Status::Success);
+        assert_eq!(res.unwrap(), true);
     }
 
     //  Cond1
@@ -241,7 +237,7 @@ mod tests {
         let mut bt = BehaviorTree::new_test(cond1);
 
         // Then
-        assert_eq!(bt.run_once().await.unwrap(), Status::Failure);
+        assert_eq!(bt.execute().await.unwrap(), false);
     }
 
     //  Cond1
@@ -257,9 +253,8 @@ mod tests {
         let cond1 = Condition::new("1", handle.clone(), |x| x > 0, action1);
         let mut bt = BehaviorTree::new_test(cond1);
 
-        // Note that because the whole tree is run, it should not be allowed to repeat
         tokio::select! {
-            err = bt.run() => {panic!("{err:?}");}
+            _ = bt.execute() => {}
             _ = async {
                 sleep(Duration::from_millis(1000)).await;
             } => {}
@@ -272,6 +267,8 @@ mod tests {
             OuterStatus::Running,
             OuterStatus::Success,
             OuterStatus::Success,
+            OuterStatus::Killed,
+            OuterStatus::Killed,
         ];
         let mut received_statuses = vec![];
         while let Ok(update) = rx.try_recv() {
@@ -301,7 +298,7 @@ mod tests {
         let mut bt = BehaviorTree::new_test(cond1);
 
         // Then
-        assert_eq!(bt.run_once().await.unwrap(), Status::Success);
+        assert_eq!(bt.execute().await.unwrap(), true);
     }
 
     //  Cond1
@@ -320,7 +317,7 @@ mod tests {
         let mut bt = BehaviorTree::new_test(cond1);
 
         // Then
-        assert_eq!(bt.run_once().await.unwrap(), Status::Failure);
+        assert_eq!(bt.execute().await.unwrap(), false);
     }
 
     //  Cond1
@@ -339,7 +336,7 @@ mod tests {
         let mut bt = BehaviorTree::new_test(cond1);
 
         // Then
-        assert_eq!(bt.run_once().await.unwrap(), Status::Failure);
+        assert_eq!(bt.execute().await.unwrap(), false);
     }
 
     //      Seq
@@ -362,7 +359,7 @@ mod tests {
         let mut bt = BehaviorTree::new_test(seq);
 
         // Then
-        assert_eq!(bt.run_once().await.unwrap(), Status::Success);
+        assert_eq!(bt.execute().await.unwrap(), true);
     }
 
     //      FB
@@ -385,7 +382,7 @@ mod tests {
         let mut bt = BehaviorTree::new_test(fb);
 
         // Then
-        assert_eq!(bt.run_once().await.unwrap(), Status::Success);
+        assert_eq!(bt.execute().await.unwrap(), true);
     }
 
     // Fail cond 1-3. Pass cond 4, then simultanously pass cond 1-3
@@ -406,13 +403,13 @@ mod tests {
         let fb = Fallback::new(vec![cond1, cond2, cond3, cond4]);
         let mut bt = BehaviorTree::new_test(fb);
 
-        let (res, _) = tokio::join!(bt.run_once(), async {
+        let (res, _) = tokio::join!(bt.execute(), async {
             sleep(Duration::from_millis(200)).await;
             handle.set(1).await
         });
 
         // Then
-        assert_eq!(res.unwrap(), Status::Success);
+        assert_eq!(res.unwrap(), true);
     }
 
     //      Seq
@@ -431,13 +428,13 @@ mod tests {
         let seq = Sequence::new(vec![cond1, action1]);
         let mut bt = BehaviorTree::new_test(seq);
 
-        let (res, _) = tokio::join!(bt.run_once(), async {
+        let (res, _) = tokio::join!(bt.execute(), async {
             sleep(Duration::from_millis(200)).await;
             handle.set(-1).await
         });
 
         // Then
-        assert_eq!(res.unwrap(), Status::Success);
+        assert_eq!(res.unwrap(), true);
     }
 
     //      FB
@@ -460,7 +457,7 @@ mod tests {
         let mut bt = BehaviorTree::new_test(fb);
 
         // Then
-        assert_eq!(bt.run_once().await.unwrap(), Status::Success);
+        assert_eq!(bt.execute().await.unwrap(), true);
     }
 
     //      Seq
@@ -487,7 +484,7 @@ mod tests {
         let mut bt = BehaviorTree::new_test(seq);
 
         // Then
-        assert_eq!(bt.run_once().await.unwrap(), Status::Failure);
+        assert_eq!(bt.execute().await.unwrap(), false);
     }
 
     //      Seq
@@ -510,7 +507,7 @@ mod tests {
         let mut bt = BehaviorTree::new_test(seq);
 
         // Then
-        assert_eq!(bt.run_once().await.unwrap(), Status::Failure);
+        assert_eq!(bt.execute().await.unwrap(), false);
     }
 
     //      Seq
@@ -532,13 +529,13 @@ mod tests {
         let seq = Sequence::new(vec![cond1, action2]);
         let mut bt = BehaviorTree::new_test(seq);
 
-        let (res, _) = tokio::join!(bt.run_once(), async {
+        let (res, _) = tokio::join!(bt.execute(), async {
             sleep(Duration::from_millis(200)).await;
             handle.set(-1).await
         });
 
         // Then
-        assert_eq!(res.unwrap(), Status::Failure);
+        assert_eq!(res.unwrap(), false);
     }
 
     //      FB
@@ -563,7 +560,7 @@ mod tests {
         let mut bt = BehaviorTree::new_test(fb);
 
         let (res, _, _) = tokio::join!(
-            bt.run_once(),
+            bt.execute(),
             async {
                 sleep(Duration::from_millis(200)).await;
                 handle1.set(vec![i32::default()]).await
@@ -575,7 +572,7 @@ mod tests {
         );
 
         // Then
-        assert_eq!(res.unwrap(), Status::Success);
+        assert_eq!(res.unwrap(), true);
     }
 
     //      FB
@@ -597,13 +594,13 @@ mod tests {
         let fb = Fallback::new(vec![cond1, action2]);
         let mut bt = BehaviorTree::new_test(fb);
 
-        let (res, _) = tokio::join!(bt.run_once(), async {
+        let (res, _) = tokio::join!(bt.execute(), async {
             sleep(Duration::from_millis(200)).await;
             handle.set(1).await
         });
 
         // Then
-        assert_eq!(res.unwrap(), Status::Success);
+        assert_eq!(res.unwrap(), true);
     }
 
     //      Seq
@@ -629,13 +626,13 @@ mod tests {
         let seq = Sequence::new(vec![cond1, action2]);
         let mut bt = BehaviorTree::new_test(seq);
 
-        let (res, _) = tokio::join!(bt.run_once(), async {
+        let (res, _) = tokio::join!(bt.execute(), async {
             sleep(Duration::from_millis(200)).await;
             handle2.set(-1).await
         });
 
         // Then
-        assert_eq!(res.unwrap(), Status::Failure);
+        assert_eq!(res.unwrap(), false);
     }
 
     //     Cond1
@@ -658,13 +655,13 @@ mod tests {
         let mut bt = BehaviorTree::new_test(cond1);
 
         // let cond2 fail during execution
-        let (res, _) = tokio::join!(bt.run_once(), async {
+        let (res, _) = tokio::join!(bt.execute(), async {
             sleep(Duration::from_millis(200)).await;
             handle.set(-1).await
         });
 
         // Then
-        assert_eq!(res.unwrap(), Status::Failure);
+        assert_eq!(res.unwrap(), false);
     }
 
     //          FB
@@ -694,8 +691,8 @@ mod tests {
         let fb1 = Fallback::new(vec![cond1, action3]);
         let mut bt = BehaviorTree::new_test(fb1);
 
-        let (res, _, _) = tokio::join!(
-            bt.run_once(),
+let (res, _, _) = tokio::join!(
+            bt.execute(),
             async {
                 sleep(Duration::from_millis(200)).await;
                 handle1.set(-1).await
@@ -707,7 +704,7 @@ mod tests {
         );
 
         // Then
-        assert_eq!(res.unwrap(), Status::Success);
+        assert_eq!(res.unwrap(), true);
     }
 
     //     Cond1
@@ -733,13 +730,13 @@ mod tests {
         let cond1 = Condition::new("1", handle1.clone(), |i: i32| i > 0, fb);
         let mut bt = BehaviorTree::new_test(cond1);
 
-        let (res, _) = tokio::join!(bt.run_once(), async {
+        let (res, _) = tokio::join!(bt.execute(), async {
             sleep(Duration::from_millis(200)).await;
             handle1.set(-1).await
         },);
 
         // Then
-        assert_eq!(res.unwrap(), Status::Failure);
+        assert_eq!(res.unwrap(), false);
     }
 
     //       FB
@@ -768,7 +765,7 @@ mod tests {
         let mut bt = BehaviorTree::new_test(fb);
 
         let (res, _, _) = tokio::join!(
-            bt.run_once(),
+            bt.execute(),
             async {
                 sleep(Duration::from_millis(200)).await;
                 handle2.set(1).await
@@ -780,7 +777,7 @@ mod tests {
         );
 
         // Then
-        assert_eq!(res.unwrap(), Status::Success);
+        assert_eq!(res.unwrap(), true);
     }
 
     // Redundant with tests below
@@ -808,7 +805,7 @@ mod tests {
         let mut bt = BehaviorTree::new_test(action);
 
         let res = tokio::time::timeout(std::time::Duration::from_secs(1), bt.execute()).await;
-        assert!(res.is_err(), "bt.run() unexpectedly returned: {:?}", res);
+        assert!(res.is_err(), "bt.execute() unexpectedly returned: {:?}", res);
     }
 
     #[tokio::test]
@@ -833,7 +830,7 @@ mod tests {
             logs
         );
 
-        // check the last log line for this node contains "Idle"
+        // check the last log line for this node contains "Killed"
         let last = node_logs.last().unwrap();
         assert!(
             last.args().contains("Killed"),
